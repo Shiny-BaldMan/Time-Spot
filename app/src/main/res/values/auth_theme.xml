@@ -1,0 +1,12 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Timecaptule.Auth" parent="Theme.Material3.Light.NoActionBar">
+        <item name="colorPrimary">#315C49</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="colorSecondary">#315C49</item>
+        <item name="colorSurface">#FFFFFF</item>
+        <item name="colorOnSurface">#203D32</item>
+        <item name="colorOnSurfaceVariant">#59675F</item>
+        <item name="android:colorAccent">#315C49</item>
+    </style>
+</resources>
