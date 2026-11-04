@@ -59,7 +59,7 @@
                         android:autofillHints="password" android:saveEnabled="false" />
                 </com.google.android.material.textfield.TextInputLayout>
                 <TextView android:id="@+id/signupNote" android:layout_width="match_parent" android:layout_height="wrap_content"
-                    android:text="닉네임은 친구가 나를 찾을 때도 사용해요.\n이메일과 전화번호는 받지 않아요."
+                    android:text="닉네임은 영문·숫자·밑줄 2~20자이며 변경할 수 없어요.\n대소문자는 구분하지 않아요. 비밀번호는 8자 이상 입력해 주세요."
                     android:textSize="13sp" android:textColor="#59675F" android:lineSpacingExtra="4dp"
                     android:layout_marginTop="16dp" android:visibility="gone" />
                 <TextView android:id="@+id/authStatus" android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -74,7 +74,7 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
         <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:text="지금은 화면 미리보기예요. 가입과 로그인은 준비 중입니다."
+            android:text="닉네임과 비밀번호로 가입하고 로그인할 수 있어요."
             android:textSize="12sp" android:textColor="#59675F" android:gravity="center" android:layout_marginTop="20dp" />
         <com.google.android.material.button.MaterialButton android:id="@+id/previewButton"
             style="@style/Widget.Material3.Button.TextButton" android:layout_width="match_parent" android:layout_height="wrap_content"

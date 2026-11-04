@@ -9,7 +9,6 @@ import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.android.material.textfield.TextInputLayout
 import androidx.core.widget.doAfterTextChanged
 import androidx.core.view.doOnPreDraw
-import java.util.concurrent.Executors
 import android.widget.*
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
@@ -22,13 +21,13 @@ import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Locale
 
-/** Offline prototype; real authentication and server access checks are not connected. */
+/** Firebase accounts with a local capsule preview. */
 class MainActivity : AppCompatActivity() {
-    private val prefs by lazy { getSharedPreferences("capsule_preview", MODE_PRIVATE) }
+    private val accounts by lazy { AuthRepository() }
+    private val prefs get() = getSharedPreferences("capsules_${accounts.currentUser?.uid ?: "guest"}", MODE_PRIVATE)
     private lateinit var body: LinearLayout
     private var timer: CountDownTimer? = null
     private var screen = "home"
-    private val startupExecutor = Executors.newSingleThreadExecutor()
     private val dates = SimpleDateFormat("yyyy.MM.dd HH:mm", Locale.KOREA)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -38,7 +37,7 @@ class MainActivity : AppCompatActivity() {
             override fun handleOnBackPressed() {
                 when (screen) {
                     "auth", "splash" -> finish()
-                    "home" -> auth()
+                    "home" -> finish()
                     else -> home()
                 }
             }
@@ -56,22 +55,19 @@ class MainActivity : AppCompatActivity() {
             insets
         }
         root.doOnPreDraw {
-            startupExecutor.execute {
-                // Warm local storage off the UI thread; no artificial splash delay.
-                prefs.all
-                // Replace with a validated session result when authentication is connected.
-                // The offline preview does not create a signed-in session.
-                val hasAuthenticatedSession = false
-                runOnUiThread {
+            if (accounts.currentUser == null) {
+                auth()
+            } else {
+                accounts.ensureProfile().addOnCompleteListener { task ->
                     if (!isFinishing && !isDestroyed && screen == "splash") {
-                        if (hasAuthenticatedSession) home() else auth()
+                        if (task.isSuccessful) home() else auth(accounts.errorMessage(task.exception))
                     }
                 }
             }
         }
     }
 
-    private fun auth() {
+    private fun auth(initialMessage: String? = null) {
         timer?.cancel()
         screen = "auth"
         setContentView(R.layout.activity_main)
@@ -86,15 +82,28 @@ class MainActivity : AppCompatActivity() {
         val passwordLayout = findViewById<TextInputLayout>(R.id.passwordLayout)
         val status = findViewById<TextView>(R.id.authStatus)
         val submit = findViewById<Button>(R.id.authSubmit)
+        val tabs = findViewById<MaterialButtonToggleGroup>(R.id.authTabs)
+        val checkNickname = findViewById<View>(R.id.checkNickname)
         var signup = false
+        var busy = false
         fun message(text: String) {
             status.text = text
             status.visibility = View.VISIBLE
         }
         fun validNickname(): Boolean {
-            val valid = nickname.text.toString().matches(Regex("[가-힣a-zA-Z0-9_]{2,20}"))
-            nicknameLayout.error = if (valid) null else "한글, 영문, 숫자, 밑줄로 2~20자를 입력해 주세요."
+            val valid = accounts.isValidNickname(accounts.normalizeNickname(nickname.text.toString()))
+            nicknameLayout.error = if (valid) null else "영문, 숫자, 밑줄로 2~20자를 입력해 주세요."
             return valid
+        }
+        fun loading(value: Boolean) {
+            busy = value
+            nickname.isEnabled = !value
+            password.isEnabled = !value
+            submit.isEnabled = !value
+            checkNickname.isEnabled = !value
+            for (index in 0 until tabs.childCount) tabs.getChildAt(index).isEnabled = !value
+            findViewById<View>(R.id.previewButton).isEnabled = !value
+            submit.text = if (value) "처리 중…" else if (signup) "가입하기" else "로그인"
         }
         nickname.doAfterTextChanged {
             nicknameLayout.error = null
@@ -112,7 +121,7 @@ class MainActivity : AppCompatActivity() {
                 findViewById<View>(R.id.checkNickname).visibility = if (signup) View.VISIBLE else View.GONE
                 findViewById<View>(R.id.signupNote).visibility = if (signup) View.VISIBLE else View.GONE
                 findViewById<View>(R.id.recoveryButton).visibility = if (signup) View.GONE else View.VISIBLE
-                nicknameLayout.helperText = if (signup) "한글·영문·숫자·밑줄 2~20자" else null
+                nicknameLayout.helperText = if (signup) "영문·숫자·밑줄 2~20자 · 대소문자 구분 없음" else null
                 passwordLayout.helperText = if (signup) "비밀번호는 8자 이상 입력해 주세요." else null
                 submit.text = if (signup) "가입하기" else "로그인"
                 password.text.clear()
@@ -121,21 +130,40 @@ class MainActivity : AppCompatActivity() {
                 status.visibility = View.GONE
             }
         }
-        findViewById<View>(R.id.checkNickname).setOnClickListener {
-            if (validNickname()) message("중복 확인은 준비 중이에요. 아직 닉네임이 예약되지 않았어요.")
+        checkNickname.setOnClickListener {
+            if (busy || !validNickname()) return@setOnClickListener
+            loading(true)
+            accounts.isNicknameAvailable(accounts.normalizeNickname(nickname.text.toString()))
+                .addOnCompleteListener { task ->
+                    if (isFinishing || isDestroyed || screen != "auth") return@addOnCompleteListener
+                    loading(false)
+                    message(if (task.isSuccessful) {
+                        if (task.result) "사용 가능한 닉네임이에요. 가입 완료 시 확정돼요." else "이미 사용 중인 닉네임이에요."
+                    } else accounts.errorMessage(task.exception))
+                }
         }
         submit.setOnClickListener {
-            val nameValid = if (signup) validNickname() else nickname.text.isNotBlank().also {
-                nicknameLayout.error = if (it) null else "닉네임을 입력해 주세요."
-            }
+            if (busy) return@setOnClickListener
+            val nameValid = validNickname()
             val passwordValid = if (signup) password.text.length >= 8 else password.text.isNotEmpty()
             passwordLayout.error = if (passwordValid) null else if (signup) "8자 이상 입력해 주세요." else "비밀번호를 입력해 주세요."
             if (nameValid && passwordValid) {
-                when {
-                    signup -> message("회원가입은 준비 중이에요. 입력한 정보는 저장되지 않았어요.")
-                    // Local dummy account for trying the main screen without a server.
-                    nickname.text.toString() == "123" && password.text.toString() == "123" -> home()
-                    else -> message("닉네임 또는 비밀번호가 일치하지 않아요.")
+                loading(true)
+                status.visibility = View.GONE
+                val name = accounts.normalizeNickname(nickname.text.toString())
+                val secret = password.text.toString()
+                val request = if (signup) accounts.signUp(name, secret) else accounts.signIn(name, secret)
+                request.addOnCompleteListener { task ->
+                    if (isFinishing || isDestroyed || screen != "auth") return@addOnCompleteListener
+                    loading(false)
+                    if (task.isSuccessful) {
+                        val keyboard = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+                        keyboard.hideSoftInputFromWindow(password.windowToken, 0)
+                        password.text.clear()
+                        home()
+                    } else {
+                        message(accounts.errorMessage(task.exception))
+                    }
                 }
             }
         }
@@ -146,9 +174,13 @@ class MainActivity : AppCompatActivity() {
             } else false
         }
         findViewById<View>(R.id.recoveryButton).setOnClickListener {
-            message("비밀번호 복구는 준비 중이에요. 복구 코드를 이용하는 방식을 제공할 예정입니다.")
+            message("이메일을 등록하지 않는 방식이라 이메일 비밀번호 복구는 지원하지 않아요.")
         }
-        findViewById<View>(R.id.previewButton).setOnClickListener { home() }
+        findViewById<View>(R.id.previewButton).setOnClickListener {
+            accounts.signOut()
+            home()
+        }
+        initialMessage?.let { message(it) }
     }
 
     private fun page(name: String, title: String, subtitle: String) {
@@ -174,6 +206,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun home() {
         page("home", "기억을 묻는 곳", "오늘 남긴 작은 기록이 미래의 선물이 됩니다.")
+        accounts.nickname?.let { label("${it}님, 반가워요!") }
         label("지도 연결 준비 중", 22)
         label("지도 연결 후 현재 위치와 캡슐 마커가 표시됩니다. 지금은 장소 이름을 직접 기록해 보세요.")
         button("+ 캡슐 묻기") { compose() }
@@ -251,10 +284,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun settings() {
-        page("settings", "친구와 계정", "현재는 계정 없이 사용하는 오프라인 체험판입니다.")
-        label("닉네임 · 비밀번호 가입", 22)
-        button("로그인 · 회원가입") { auth() }
-        label("인증 서버 연결 후 닉네임 중복 검사, 가입과 자동 로그인을 사용할 수 있습니다.")
+        page("settings", "친구와 계정", accounts.nickname?.let { "${it}님으로 로그인 중이에요." } ?: "가입 없이 체험 중이에요.")
+        if (accounts.currentUser != null) {
+            button("로그아웃") {
+                accounts.signOut()
+                auth()
+            }
+        } else {
+            button("로그인 · 회원가입") { auth() }
+        }
+        label("캡슐은 현재 기기에 계정별로 저장됩니다. 다른 기기와의 동기화는 준비 중이에요.")
         label("친구에게만 나누는 기억", 22)
         label("친구 검색·요청·수락과 선택한 친구에게 캡슐을 공유하는 기능을 준비할 예정입니다.")
         label("체험판의 시간 잠금은 기기 시간을 기준으로 합니다. 실제 서비스에서는 서버에서 열람 권한을 확인해야 합니다.")
@@ -283,7 +322,6 @@ class MainActivity : AppCompatActivity() {
     }
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
     override fun onDestroy() {
-        startupExecutor.shutdownNow()
         timer?.cancel()
         super.onDestroy()
     }
