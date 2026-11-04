@@ -1,4 +1,4 @@
-﻿package com.example.timecaptule
+package com.example.timecaptule
 
 import android.app.DatePickerDialog
 import android.app.TimePickerDialog
@@ -130,7 +130,14 @@ class MainActivity : AppCompatActivity() {
             }
             val passwordValid = if (signup) password.text.length >= 8 else password.text.isNotEmpty()
             passwordLayout.error = if (passwordValid) null else if (signup) "8자 이상 입력해 주세요." else "비밀번호를 입력해 주세요."
-            if (nameValid && passwordValid) message(if (signup) "회원가입은 준비 중이에요. 입력한 정보는 저장되지 않았어요." else "로그인은 준비 중이에요. 아래 체험하기로 먼저 둘러보세요.")
+            if (nameValid && passwordValid) {
+                when {
+                    signup -> message("회원가입은 준비 중이에요. 입력한 정보는 저장되지 않았어요.")
+                    // Local dummy account for trying the main screen without a server.
+                    nickname.text.toString() == "123" && password.text.toString() == "123" -> home()
+                    else -> message("닉네임 또는 비밀번호가 일치하지 않아요.")
+                }
+            }
         }
         password.setOnEditorActionListener { _, action, _ ->
             if (action == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) {
