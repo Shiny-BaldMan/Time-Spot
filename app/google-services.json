@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "128629544048",
+    "project_id": "timespot-d05dd",
+    "storage_bucket": "timespot-d05dd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:128629544048:android:a3fc0eb2dda1572f8390b5",
+        "android_client_info": {
+          "package_name": "com.example.timecaptule"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCbD3dga49P3f-ZQfSoObTBd8tnpvYb800"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

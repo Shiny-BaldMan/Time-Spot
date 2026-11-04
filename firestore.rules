@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function ownsNickname(name) {
+      return signedIn()
+        && name.matches('[a-z0-9_]{2,20}')
+        && request.auth.token.email == name + '@login.timespot.example';
+    }
+
+    match /users/{uid} {
+      allow get: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['nickname', 'createdAt'])
+        && ownsNickname(request.resource.data.nickname)
+        && request.resource.data.createdAt == request.time;
+    }
+
+    match /nicknames/{name} {
+      // Only exact nickname checks are public; listing all nicknames is denied.
+      allow get: if true;
+      allow create: if ownsNickname(name)
+        && request.resource.data.keys().hasOnly(['uid'])
+        && request.resource.data.uid == request.auth.uid;
+    }
+    // Friends and capsules will get their own rules when their server features are added.
+  }
+}
