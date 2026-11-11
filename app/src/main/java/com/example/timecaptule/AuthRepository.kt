@@ -10,7 +10,6 @@ import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.FirebaseFirestoreException
-import com.google.firebase.firestore.Source
 import java.util.Locale
 
 /** Nicknames are permanent login IDs; passwords are handled only by Firebase Auth. */
@@ -23,10 +22,6 @@ class AuthRepository {
     fun normalizeNickname(value: String) = value.trim().lowercase(Locale.ROOT)
     fun isValidNickname(value: String) = value.matches(Regex("[a-z0-9_]{2,20}"))
     private fun email(nickname: String) = "$nickname@login.timespot.example"
-
-    fun isNicknameAvailable(nickname: String): Task<Boolean> =
-        db.collection("nicknames").document(nickname).get(Source.SERVER)
-            .onSuccessTask { snapshot -> Tasks.forResult(!snapshot.exists()) }
 
     fun signUp(nickname: String, password: String): Task<Void> =
         auth.createUserWithEmailAndPassword(email(nickname), password)
@@ -41,17 +36,25 @@ class AuthRepository {
         val user = currentUser ?: return Tasks.forException(IllegalStateException("로그인이 필요해요."))
         val name = nickname ?: return Tasks.forException(IllegalStateException("계정 정보를 확인할 수 없어요."))
         val profile = db.collection("users").document(user.uid)
-        val nameIndex = db.collection("nicknames").document(name)
+        val lookup = db.collection("friendLookup").document(name)
         return db.runTransaction { transaction ->
             val existingProfile = transaction.get(profile)
-            val existingName = transaction.get(nameIndex)
-            if (existingName.exists() && existingName.getString("uid") != user.uid) {
+            val existingLookup = transaction.get(lookup)
+            if (existingLookup.exists() && existingLookup.getString("uid") != user.uid) {
                 throw IllegalStateException("이미 사용 중인 닉네임이에요.")
             }
             if (!existingProfile.exists()) {
-                transaction.set(profile, mapOf("nickname" to name, "createdAt" to FieldValue.serverTimestamp()))
+                transaction.set(profile, mapOf(
+                    "pid" to user.uid,
+                    "nickname" to name,
+                    "createdAt" to FieldValue.serverTimestamp()
+                ))
+            } else if (existingProfile.getString("pid") != user.uid) {
+                transaction.update(profile, "pid", user.uid)
             }
-            if (!existingName.exists()) transaction.set(nameIndex, mapOf("uid" to user.uid))
+            if (!existingLookup.exists()) {
+                transaction.set(lookup, mapOf("uid" to user.uid, "nickname" to name))
+            }
             null
         }
     }
@@ -76,6 +79,7 @@ class AuthRepository {
             FirebaseFirestoreException.Code.UNAVAILABLE -> "서버에 연결할 수 없어요. 인터넷 연결을 확인해 주세요."
             else -> "사용자 정보를 저장하지 못했어요. 다시 로그인하면 재시도할 수 있어요."
         }
+        is IllegalArgumentException, is IllegalStateException -> error.message ?: "요청을 확인해 주세요."
         else -> "요청을 완료하지 못했어요. 잠시 후 다시 시도해 주세요."
     }
 }

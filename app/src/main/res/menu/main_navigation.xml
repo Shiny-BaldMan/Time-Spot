@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:id="@+id/nav_map" android:icon="@drawable/ic_tab_map" android:title="지도" />
+    <item android:id="@+id/nav_friends" android:icon="@drawable/ic_tab_friends" android:title="친구" />
+    <item android:id="@+id/nav_capsules" android:icon="@drawable/ic_tab_capsules" android:title="캡슐" />
+    <item android:id="@+id/nav_settings" android:icon="@drawable/ic_tab_settings" android:title="설정" />
+</menu>

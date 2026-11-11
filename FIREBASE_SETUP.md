@@ -1,41 +1,38 @@
-# Firebase 로그인 설정
+# Firebase 계정, 친구, 캡슐 설정
 
 프로젝트: `timespot-d05dd` / Android 패키지: `com.example.timecaptule`
 
-## 콘솔에서 한 번 설정
+## 콘솔 설정
 
-1. Authentication → 로그인 방법 → 이메일/비밀번호 활성화.
-2. Firestore Database → 규칙 → 이 저장소의 `firestore.rules` 내용을 붙여넣고 게시.
-   이 파일을 Git에 추가하는 것만으로 서버 규칙이 바뀌지는 않습니다.
-   기존 데이터에 다른 기능용 규칙이 있다면 해당 규칙도 검토 후 함께 유지하세요.
-3. 앱을 실행해 회원가입. 닉네임은 영문·숫자·밑줄 2~20자, 비밀번호는 8자 이상.
-
-## 저장되는 데이터
-
-- Authentication: `{nickname}@login.timespot.example` / Firebase가 비밀번호 관리.
-- Firestore `users/{uid}`: `nickname`, `createdAt`(서버 시각).
-- Firestore `nicknames/{nickname}`: `uid`. 닉네임 정확 일치 중복 확인용.
-- 계정 생성 후 두 Firestore 문서는 트랜잭션으로 저장합니다.
-- Firestore 저장 실패 시 계정은 Authentication에 남을 수 있습니다. 규칙·네트워크를
-  확인한 뒤 같은 계정으로 로그인하면 사용자 정보 생성을 재시도합니다.
-
-닉네임은 소문자로 정규화하며 변경하지 않습니다. 내부 이메일은 실제 메일함이
-아니므로 이메일 인증·비밀번호 복구를 제공하지 않습니다. 기존 `123 / 123` 더미
-로그인은 제거했습니다. 테스트할 계정도 회원가입으로 직접 생성해야 합니다.
-
-## 확인 순서
-
-1. 새 닉네임으로 중복 확인 → 회원가입 → 메인 화면 이동.
-2. Firebase 콘솔에서 Authentication 계정 및 두 Firestore 문서 생성 확인.
-3. 앱 강제 종료 후 재실행 → 자동 로그인 확인.
-4. 친구 · 계정 → 로그아웃 → 잘못된 비밀번호로 오류 확인 → 올바른 비밀번호로 로그인.
-5. 같은 닉네임으로 재가입하면 중복 오류, 다른 계정의 사용자 문서는 조회 거부.
-
-캡슐은 아직 계정별 로컬 저장입니다. 친구·캡슐의 Firestore 저장과 사진 업로드는
-이번 로그인 구현에 포함되지 않습니다. 이전 체험 데이터는 자동 이전하지 않습니다.
-
-CLI를 사용할 경우 Firebase 프로젝트 관리자 인증 후 다음 명령으로 규칙만 배포할 수 있습니다.
+1. Firebase Authentication에서 이메일/비밀번호 로그인을 활성화합니다.
+2. 관리자 인증이 된 Firebase CLI에서 다음 명령을 실행해 Firestore 규칙과 친구 요청 인덱스를 배포합니다.
 
 ```shell
-firebase deploy --only firestore:rules --project timespot-d05dd
+firebase deploy --only firestore:rules,firestore:indexes --project timespot-d05dd
 ```
+
+## 데이터 구조
+
+- Authentication 계정 이메일은 `{nickname}@login.timespot.example` 형식이며, Firebase Auth가 닉네임 중복을 막습니다.
+- `users/{uid}`는 공개 PID(`pid`, Firebase Auth UID), 닉네임, 생성 시각만 보관합니다. 다른 사용자의 프로필은 PID를 알고 있을 때만 읽을 수 있고 전체 사용자 목록은 조회할 수 없습니다.
+- `friendLookup/{nickname}`은 닉네임을 UID로 찾는 정확 일치 검색 인덱스입니다. 전체 목록은 조회할 수 없습니다. 닉네임 검색을 제공하려면 이처럼 별도의 검색 인덱스가 필요합니다.
+- `friendRequests/{fromUid}__{toUid}`는 보낸 사람, 받은 사람, 상태를 보관합니다. 받은 사람이 수락하면 `friendships/{uidPair}`가 생성되고 양쪽 친구 목록에 나타납니다.
+- `users/{uid}/sharedCapsules/{capsuleId}`는 공유받은 캡슐의 참조만 보관합니다. 실제 캡슐 내용은 별도 읽기 규칙으로 다시 확인합니다.
+- `capsules/{capsuleId}`는 소유자, 내용, 열람 시각, 공유 대상 PID 목록을 보관합니다. 소유자는 언제든지 볼 수 있고, 공유 대상 친구는 친구 관계가 유지되고 `opensAt`이 지난 뒤에만 읽을 수 있습니다.
+- 캡슐 하나는 최대 8명과 공유할 수 있습니다.
+- 기존 `nicknames/{nickname}` 문서는 앱에서 더 이상 읽거나 쓰지 않습니다. 이 변경은 기존 문서를 자동 삭제하지 않습니다.
+
+기존 계정의 `friendLookup` 항목은 새 앱으로 로그인할 때 `ensureProfile()`이 채웁니다. Firestore 배포 후 기존 사용자가 한 번 로그인해야 닉네임으로 검색할 수 있습니다.
+
+닉네임은 소문자로 정규화하며 변경하지 않습니다. 내부 이메일은 실제 메일함이 아니므로 이메일 인증과 비밀번호 복구는 제공하지 않습니다. 비밀번호는 8자 이상이어야 합니다.
+
+## 사용 방법
+
+1. 회원가입 후 친구 · 계정 화면에서 닉네임으로 친구 요청을 보냅니다.
+2. 상대방이 요청을 수락하면 양쪽 친구 목록에 표시됩니다.
+3. 캡슐 작성 화면에서 공유할 친구를 선택합니다. 선택하지 않으면 나만 볼 수 있습니다.
+4. 친구는 캡슐의 열람 시각이 지난 뒤 홈 화면에서 공유 캡슐을 볼 수 있습니다.
+
+로그인 전 만든 체험 캡슐은 로컬 기기에 남으며 Firestore로 자동 이전되지 않습니다. 로그인한 계정의 새 캡슐은 Firestore에 저장됩니다. 닉네임 검색 인덱스에는 닉네임과 UID만 저장하고, 프로필 문서에도 민감한 정보를 넣지 마세요.
+
+Firebase CLI 명령은 Firestore 배포 권한을 가진 개발자가 실행해야 합니다. 이 저장소의 규칙 파일만 변경해도 Firebase 콘솔의 실제 규칙은 바뀌지 않습니다.

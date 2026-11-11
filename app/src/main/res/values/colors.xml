@@ -2,4 +2,11 @@
 <resources>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <color name="spot_background">#F6F7F2</color>
+    <color name="spot_surface">#FFFFFF</color>
+    <color name="spot_ink">#203D32</color>
+    <color name="spot_muted">#65736C</color>
+    <color name="spot_accent">#3F6557</color>
+    <color name="spot_border">#DFE6DD</color>
+    <color name="spot_nav_indicator">#E8EEE8</color>
 </resources>

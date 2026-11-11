@@ -2,27 +2,158 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
-    function ownsNickname(name) {
-      return signedIn()
-        && name.matches('[a-z0-9_]{2,20}')
-        && request.auth.token.email == name + '@login.timespot.example';
+    function ownsProfile(uid) { return signedIn() && request.auth.uid == uid; }
+    function areFriends(uidA, uidB) {
+      return signedIn() && (
+        exists(/databases/$(database)/documents/friendships/$(uidA + '__' + uidB))
+        || exists(/databases/$(database)/documents/friendships/$(uidB + '__' + uidA))
+      );
     }
 
     match /users/{uid} {
-      allow get: if signedIn() && request.auth.uid == uid;
-      allow create: if signedIn() && request.auth.uid == uid
-        && request.resource.data.keys().hasOnly(['nickname', 'createdAt'])
-        && ownsNickname(request.resource.data.nickname)
+      // Public profile fields only; direct PID reads work, enumeration is denied.
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if ownsProfile(uid)
+        && request.resource.data.keys().hasOnly(['pid', 'nickname', 'createdAt'])
+        && request.resource.data.pid == uid
+        && request.resource.data.nickname.matches('[a-z0-9_]{2,20}')
         && request.resource.data.createdAt == request.time;
+      allow update: if ownsProfile(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['pid'])
+        && request.resource.data.pid == uid;
+      allow delete: if false;
+
+      match /sharedCapsules/{capsuleId} {
+        function sourceCapsule() {
+          return getAfter(/databases/$(database)/documents/capsules/$(capsuleId));
+        }
+
+        allow get, list: if ownsProfile(uid);
+        allow create: if signedIn()
+          && request.auth.uid != uid
+          && request.resource.data.keys().hasOnly(['capsuleId', 'ownerUid', 'opensAt', 'createdAt'])
+          && request.resource.data.capsuleId == capsuleId
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.opensAt is timestamp
+          && request.resource.data.createdAt == request.time
+          && areFriends(request.auth.uid, uid)
+          && sourceCapsule().data.ownerUid == request.auth.uid
+          && uid in sourceCapsule().data.sharedWith
+          && request.resource.data.opensAt == sourceCapsule().data.opensAt;
+        allow update: if false;
+        allow delete: if ownsProfile(uid)
+          || (signedIn() && resource.data.ownerUid == request.auth.uid);
+      }
     }
 
-    match /nicknames/{name} {
-      // Only exact nickname checks are public; listing all nicknames is denied.
-      allow get: if true;
-      allow create: if ownsNickname(name)
-        && request.resource.data.keys().hasOnly(['uid'])
-        && request.resource.data.uid == request.auth.uid;
+    // Exact nickname lookup only. Clients cannot list or change lookup entries.
+    match /friendLookup/{nickname} {
+      allow get: if signedIn();
+      allow list: if false;
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['uid', 'nickname'])
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.nickname == nickname
+        && nickname.matches('[a-z0-9_]{2,20}')
+        && getAfter(/databases/$(database)/documents/users/$(request.auth.uid)).data.nickname == nickname;
+      allow update, delete: if false;
     }
-    // Friends and capsules will get their own rules when their server features are added.
+
+    match /friendRequests/{requestId} {
+      allow get: if signedIn() && (
+        requestId.matches('^' + request.auth.uid + '__[A-Za-z0-9_-]{1,128}$')
+        || requestId.matches('^[A-Za-z0-9_-]{1,128}__' + request.auth.uid + '$')
+        || resource.data.fromUid == request.auth.uid
+        || resource.data.toUid == request.auth.uid
+      );
+      allow list: if signedIn()
+        && (resource.data.fromUid == request.auth.uid || resource.data.toUid == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          'fromUid', 'toUid', 'fromNickname', 'toNickname', 'status', 'createdAt'
+        ])
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.toUid != request.auth.uid
+        && requestId == request.resource.data.fromUid + '__' + request.resource.data.toUid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdAt == request.time
+        && get(/databases/$(database)/documents/users/$(request.resource.data.fromUid)).data.nickname == request.resource.data.fromNickname
+        && get(/databases/$(database)/documents/users/$(request.resource.data.toUid)).data.nickname == request.resource.data.toNickname
+        && !exists(/databases/$(database)/documents/friendRequests/$(request.resource.data.toUid + '__' + request.resource.data.fromUid))
+        && !areFriends(request.resource.data.fromUid, request.resource.data.toUid);
+      allow update: if signedIn()
+        && request.auth.uid == resource.data.toUid
+        && resource.data.status == 'pending'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedAt'])
+        && request.resource.data.status in ['accepted', 'rejected']
+        && request.resource.data.respondedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /friendships/{friendshipId} {
+      allow get: if signedIn() && (
+        friendshipId.matches('^' + request.auth.uid + '__[A-Za-z0-9_-]{1,128}$')
+        || friendshipId.matches('^[A-Za-z0-9_-]{1,128}__' + request.auth.uid + '$')
+        || resource.data.uidA == request.auth.uid
+        || resource.data.uidB == request.auth.uid
+      );
+      allow list: if signedIn()
+        && (resource.data.uidA == request.auth.uid || resource.data.uidB == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          'uidA', 'nicknameA', 'uidB', 'nicknameB', 'requestId', 'createdAt'
+        ])
+        && request.resource.data.uidA != request.resource.data.uidB
+        && (request.resource.data.uidA + '__' + request.resource.data.uidB == friendshipId
+          || request.resource.data.uidB + '__' + request.resource.data.uidA == friendshipId)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.requestId == request.resource.data.uidA + '__' + request.resource.data.uidB
+        && get(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId)).data.status == 'pending'
+        && getAfter(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId)).data.status == 'accepted'
+        && get(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId)).data.fromUid == request.resource.data.uidA
+        && get(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId)).data.toUid == request.resource.data.uidB
+        && request.auth.uid == request.resource.data.uidB
+        && get(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId)).data.fromNickname == request.resource.data.nicknameA
+        && get(/databases/$(database)/documents/friendRequests/$(request.resource.data.requestId)).data.toNickname == request.resource.data.nicknameB;
+      allow update: if false;
+      allow delete: if signedIn()
+        && (resource.data.uidA == request.auth.uid || resource.data.uidB == request.auth.uid);
+    }
+
+    match /capsules/{capsuleId} {
+      function validCapsule() {
+        return request.resource.data.keys().hasOnly([
+          'ownerUid', 'ownerNickname', 'title', 'place', 'content', 'opensAt', 'sharedWith', 'createdAt'
+        ])
+          && request.resource.data.ownerUid == request.auth.uid
+          && request.resource.data.ownerNickname is string
+          && request.resource.data.title is string
+          && request.resource.data.place is string
+          && request.resource.data.content is string
+          && request.resource.data.title.size() <= 60
+          && request.resource.data.place.size() <= 100
+          && request.resource.data.content.size() <= 5000
+          && request.resource.data.opensAt is timestamp
+          && request.resource.data.opensAt > request.time
+          && request.resource.data.sharedWith is list
+          && request.resource.data.sharedWith.size() <= 8
+          && request.resource.data.createdAt == request.time;
+      }
+
+      function canRead() {
+        return signedIn() && (
+          resource.data.ownerUid == request.auth.uid
+          || (request.auth.uid in resource.data.sharedWith
+            && areFriends(resource.data.ownerUid, request.auth.uid)
+            && resource.data.opensAt <= request.time)
+        );
+      }
+
+      allow get, list: if canRead();
+      allow create: if signedIn() && validCapsule();
+      allow update: if false;
+      allow delete: if signedIn() && resource.data.ownerUid == request.auth.uid;
+    }
   }
 }

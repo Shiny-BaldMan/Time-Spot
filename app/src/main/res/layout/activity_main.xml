@@ -46,10 +46,6 @@
                         android:inputType="text|textNoSuggestions" android:singleLine="true" android:imeOptions="actionNext"
                         android:autofillHints="username" android:maxLength="20" />
                 </com.google.android.material.textfield.TextInputLayout>
-                <com.google.android.material.button.MaterialButton android:id="@+id/checkNickname"
-                    style="?attr/materialButtonOutlinedStyle" android:layout_width="match_parent"
-                    android:layout_height="wrap_content" android:minHeight="48dp" android:text="닉네임 중복 확인"
-                    android:visibility="gone" />
                 <com.google.android.material.textfield.TextInputLayout android:id="@+id/passwordLayout"
                     style="@style/Widget.Material3.TextInputLayout.OutlinedBox" android:layout_width="match_parent"
                     android:layout_height="wrap_content" android:layout_marginTop="12dp" android:hint="비밀번호" app:endIconMode="password_toggle">
