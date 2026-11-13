@@ -19,6 +19,7 @@ import android.view.Gravity
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.content.res.ColorStateList
+import android.webkit.GeolocationPermissions
 import com.google.android.material.button.MaterialButtonToggleGroup
 import com.google.android.material.bottomnavigation.BottomNavigationView
 import com.google.android.material.textfield.TextInputLayout
@@ -287,7 +288,6 @@ class MainActivity : AppCompatActivity() {
         label(title, 26)
         label(subtitle, 15)
     }
-
     private fun home() {
         selectedTab = R.id.nav_map
         lastRenderedLocation = null
@@ -295,33 +295,284 @@ class MainActivity : AppCompatActivity() {
         page("map", "지도", "현재 위치를 중심으로 주변을 확인하세요.")
         locationStatus = label("현재 위치를 확인하고 있어요…", 14)
         button("현재 위치로 이동") { requestCurrentLocation() }
+
+        android.util.Log.d("MapDebug", "1. home() 함수 진입 및 WebView 생성 시작")
+
         val map = WebView(this).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+            settings.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
             settings.userAgentString = "${settings.userAgentString} TimeSpot/1.0"
+
+            // 의심 지점 A: 지오로케이션 권한 요청 프롬프트 호출 여부 확인
+            webChromeClient = object : android.webkit.WebChromeClient() {
+                override fun onGeolocationPermissionsShowPrompt(
+                    origin: String?,
+                    callback: android.webkit.GeolocationPermissions.Callback?
+                ) {
+                    android.util.Log.d("MapDebug", "2. WebChromeClient: 지오로케이션 권한 요청 승인 처리 (origin: $origin)")
+                    callback?.invoke(origin, true, false)
+                }
+                override fun onConsoleMessage(consoleMessage: android.webkit.ConsoleMessage?): Boolean {
+                    android.util.Log.d("MapJS", "${consoleMessage?.message()} -- Line ${consoleMessage?.lineNumber()} of ${consoleMessage?.sourceId()}")
+                    return true
+                }
+            }
+
+
+
             webViewClient = object : WebViewClient() {
-                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                override fun onPageStarted(
+                    view: WebView?,
+                    url: String?,
+                    favicon: android.graphics.Bitmap?
+                ) {
+                    android.util.Log.d("MapDebug", "3. WebView 로드 시작: url = $url")
                     locationStatus?.text = "지도를 불러오는 중…"
                 }
+
                 override fun onPageFinished(view: WebView?, url: String?) {
+                    android.util.Log.d("MapDebug", "4. WebView 로드 완료 (onPageFinished 호출됨)")
                     locationStatus?.text = "현재 위치 주변 지도"
+
+                    if (accounts.currentUser == null) {
+
+                        val items = capsules()
+                        val escapedJson = items.toString().replace("'", "\\'")
+                        view?.evaluateJavascript("setCapsuleMarkers('$escapedJson')", null)
+                    } else {
+                    capsuleStore.listVisible().addOnCompleteListener { task ->
+                        if (task.isSuccessful && !isFinishing && !isDestroyed) {
+                            val list = task.result
+                            val jsonArray = JSONArray()
+                            list.forEach { cap ->
+                                val obj = JSONObject().apply {
+                                    put(
+                                        "title",
+                                        if (cap.ownerUid == accounts.currentUser?.uid) cap.title else "${cap.ownerNickname}님의 캡슐 · ${cap.title}"
+                                    )
+                                    put("place", cap.place)
+                                    put("content", cap.content)
+                                    put("opensAt", cap.opensAtMillis)
+                                    // SharedCapsule 모델에 lat, lng 필드가 있다고 가정 (없다면 추가 필요)
+                                    put("lat", cap.lat)
+                                    put("lng", cap.lng)
+                                }
+                                jsonArray.put(obj)
+                            }
+                            val escapedJson = jsonArray.toString().replace("'", "\\'")
+                            view?.evaluateJavascript("setCapsuleMarkers('$escapedJson')", null)
+                        }
+                    }
                 }
+            }
+
+
                 override fun onReceivedError(
                     view: WebView?,
                     request: android.webkit.WebResourceRequest?,
                     error: android.webkit.WebResourceError?
                 ) {
+                    // 의심 지점 B: 메인 프레임 로드 실패 시 에러 내용 확인
+                    android.util.Log.e("MapDebug", "X. WebView 에러 발생: ${error?.description}, code: ${error?.errorCode}")
                     if (request?.isForMainFrame == true) locationStatus?.text = "지도를 불러오지 못했어요. 인터넷 연결을 확인해 주세요."
                 }
             }
             setBackgroundColor(Color.WHITE)
+
+            val htmlContent = """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <style>
+                    html, body, #map { height: 100%; margin: 0; padding: 0; }
+                </style>
+                <script>
+                    let map;
+                    let marker;
+                    let isMapReady = false;
+                    let pendingLocation = null;
+                    let capsuleMarkers = [];
+                    let infoWindow;
+
+                    function initMap() {
+                        const defaultLocation = { lat: 37.5665, lng: 126.9780 };
+                        map = new google.maps.Map(document.getElementById("map"), {
+                            zoom: 15,
+                            center: defaultLocation,
+                        });
+                        marker = new google.maps.Marker({
+                            position: defaultLocation,
+                            map: map,
+                            title: "현재 위치",
+                        });
+                        
+                        infoWindow = new google.maps.InfoWindow();
+                        isMapReady = true;
+                        
+                        if (pendingLocation) {
+                            updateMapLocation(pendingLocation.lat, pendingLocation.lng);
+                            pendingLocation = null;
+                        }
+                    }
+
+                    function updateMapLocation(lat, lng) {
+                        if (!isMapReady || !map) {
+                            pendingLocation = { lat: lat, lng: lng };
+                            return;
+                        }
+                        const newLatLng = { lat: lat, lng: lng };
+                        map.setCenter(newLatLng);
+                        if (marker) {
+                            marker.setPosition(newLatLng);
+                        }
+                    }
+
+                    // 저장된 캡슐 목록을 받아 지도 위에 마커를 찍고 클릭 이벤트 부여
+                    function setCapsuleMarkers(jsonString) {
+                        if (!isMapReady || !map) return;
+                        
+                        // 기존 마커 초기화
+                        capsuleMarkers.forEach(m => m.setMap(null));
+                        capsuleMarkers = [];
+
+                        try {
+                            const capsules = JSON.parse(jsonString);
+                            capsules.forEach(cap => {
+                                if (cap.lat && cap.lng) {
+                                  const capMarker = new google.maps.Marker({
+                                        position: { lat: cap.lat, lng: cap.lng },
+                                        map: map,
+                                        title: cap.title
+                                    });
+
+                                    // 마커 클릭 시 이름과 장소를 담은 인포윈도우 표시
+                                    capMarker.addListener("click", () => {
+                                        const content = `
+                                            <div style="padding:6px; color:#000; font-family:sans-serif;">
+                                                <strong style="font-size:14px;">${'$'}{cap.title}</strong><br>
+                                                <span style="font-size:12px; color:#555;">📍 ${'$'}{cap.place}</span>
+                                            </div>
+                                        `;
+                                        infoWindow.setContent(content);
+                                        infoWindow.open(map, capMarker);
+                                    });
+
+                                    capsuleMarkers.push(capMarker);
+                                }
+                            });
+                        } catch (e) {
+                            console.error("Error parsing capsule markers", e);
+                        }
+                    }
+                </script>
+                <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC3a4FBTAdKaR9BMSVUd-UmpFBcNrrdUWg&callback=initMap"></script>
+            </head>
+            <body>
+                <div id="map"></div>
+            </body>
+            </html>
+            """.trimIndent()
+
+            android.util.Log.d("MapDebug", "5. loadDataWithBaseURL 호출 직전")
+            loadDataWithBaseURL("https://localhost", htmlContent, "text/html", "UTF-8", null)
         }
+
         mapWebView = map
         body.addView(map, LinearLayout.LayoutParams(-1, 0, 1f))
-        label("© OpenStreetMap contributors", 12)
+        label("© Google Maps", 12)
         requestCurrentLocation()
     }
+
+    //디버깅용 출력문이 제거된 home함수
+//    private fun home() {
+//        selectedTab = R.id.nav_map
+//        lastRenderedLocation = null
+//        lastMapLoadAt = 0L
+//        page("map", "지도", "현재 위치를 중심으로 주변을 확인하세요.")
+//        locationStatus = label("현재 위치를 확인하고 있어요…", 14)
+//        button("현재 위치로 이동") { requestCurrentLocation() }
+//        val map = WebView(this).apply {
+//            settings.javaScriptEnabled = true
+//            settings.domStorageEnabled = true
+//
+//            settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+//            settings.userAgentString = "${settings.userAgentString} TimeSpot/1.0"
+//
+//            webChromeClient = object : android.webkit.WebChromeClient() {
+//                override fun onGeolocationPermissionsShowPrompt(
+//                    origin: String?,
+//                    callback: GeolocationPermissions.Callback?
+//                ) {
+//                    callback?.invoke(origin, true,false)
+//                }
+//            }
+//
+//            webViewClient = object : WebViewClient() {
+//                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+//                    locationStatus?.text = "지도를 불러오는 중…"
+//                }
+//                override fun onPageFinished(view: WebView?, url: String?) {
+//                    locationStatus?.text = "현재 위치 주변 지도"
+//                }
+//                override fun onReceivedError(
+//                    view: WebView?,
+//                    request: android.webkit.WebResourceRequest?,
+//                    error: android.webkit.WebResourceError?
+//                ) {
+//                    if (request?.isForMainFrame == true) locationStatus?.text = "지도를 불러오지 못했어요. 인터넷 연결을 확인해 주세요."
+//                }
+//            }
+//            setBackgroundColor(Color.WHITE)
+//
+//            val htmlContent = """
+//                <!DOCTYPE html>
+//                <html>
+//                <head>
+//                    <meta name = "viewport" content = "width = device-width, initial-scale = 1.0">
+//                    <style>
+//                        html, body, #map { height: 100%; margin: 0; padding: 0; }
+//                    </style>
+//                </head>
+//                <body>
+//                    <div id = "map"></div>
+//                    <script>
+//                        function initMap() {
+//                            const currentLocation = { lat: 30, lng: 120 }; //위치데이터 연동시 값이 갱신될거라고 생각하고 임시 좌표값 넣어두기
+//                            const map = new google.maps.Map(document.getElementById("map"), {
+//                                zoom: 15,
+//                                center: currentLocation,
+//                            });
+//                            new google.maps.Marker({
+//                                position: currentLocation,
+//                                map: map,
+//                                title: "현재 위치",
+//                            });
+//                        function updateMapLocation(lat, lng) {
+//                            if (!map) return;
+//                            const newLatLng  = { lat: lat, lng: lng };
+//                            map.setCenter(newLatLng);
+//                            marker.setPosition(newLatLng);
+//                        }
+//
+//                        window.onload = initMap;
+//
+//                    </script>
+//                    <script async defer src = "https://maps.googleapis.com/maps/api/js?key=AIzaSyC3a4FBTAdKaR9BMSVUd-UmpFBcNrrdUWg&callback=initMap"></script>
+//                </body>
+//                </html>
+//
+//            """.trimIndent()
+//
+//            loadDataWithBaseURL("https://localhost", htmlContent, "text/html", "UTF-8", null)
+//        }
+//        mapWebView = map
+//        body.addView(map, LinearLayout.LayoutParams(-1, 0, 1f))
+//        label("© Google", 12)
+//        requestCurrentLocation()
+//    }
 
     private fun showSelectedTab() {
         when (selectedTab) {
@@ -402,18 +653,19 @@ class MainActivity : AppCompatActivity() {
         if (!force && previous != null && previous.distanceTo(location) < 75f && System.currentTimeMillis() - lastMapLoadAt < 30_000L) return
         val lat = location.latitude.coerceIn(-85.0, 85.0)
         val lon = location.longitude.coerceIn(-180.0, 180.0)
-        val latDelta = 0.006
-        val lonDelta = (0.008 / kotlin.math.cos(Math.toRadians(lat)).coerceAtLeast(0.15)).coerceAtMost(0.08)
-        val bbox = Uri.encode("${lon - lonDelta},${lat - latDelta},${lon + lonDelta},${lat + latDelta}")
-        val marker = Uri.encode("$lat,$lon")
-        map.loadUrl("https://www.openstreetmap.org/export/embed.html?bbox=$bbox&layer=mapnik&marker=$marker")
+//        val latDelta = 0.006
+//        val lonDelta = (0.008 / kotlin.math.cos(Math.toRadians(lat)).coerceAtLeast(0.15)).coerceAtMost(0.08)
+//        val bbox = Uri.encode("${lon - lonDelta},${lat - latDelta},${lon + lonDelta},${lat + latDelta}")
+//        val marker = Uri.encode("$lat,$lon")
+//        map.loadUrl("https://maps.googleapis.com/maps/api/js?key=AIzaSyAOi5_rhtM-coFCSXEhYoN_v4Lo8upYzSI&callback=initMap?bbox=$bbox&layer=mapnik&marker=$marker")
+        map.evaluateJavascript("updateMapLocation($lat, $lon)", null)
         lastRenderedLocation = Location(location)
         lastMapLoadAt = System.currentTimeMillis()
     }
 
     private fun stopLocationUpdates() {
         if (locationUpdatesActive) {
-            runCatching { locationManager.removeUpdates(locationListener) }
+            runCatching { locationManager.removeUpdates(locationListener)}
             locationUpdatesActive = false
         }
     }
@@ -459,7 +711,7 @@ class MainActivity : AppCompatActivity() {
                     if (task.result.isEmpty()) label("친구 · 계정에서 닉네임으로 친구 요청을 보낼 수 있어요.")
                     task.result.forEach { friend ->
                         CheckBox(this).apply {
-                            text = "${friend.nickname} (${friend.uid.take(8)}…)"
+                            text = "${friend.nickname}"
                             setOnCheckedChangeListener { _, checked ->
                                 if (checked && selectedFriendIds.size >= 8) {
                                     isChecked = false
@@ -489,10 +741,17 @@ class MainActivity : AppCompatActivity() {
                 content.text.isBlank() -> content.error = "내용을 입력해 주세요."
                 opensAt.timeInMillis <= System.currentTimeMillis() -> Toast.makeText(this, "미래 시간을 선택해 주세요.", Toast.LENGTH_SHORT).show()
                 else -> {
+                    val lat = currentLocation?.latitude ?: 37.5665
+                    val lng = currentLocation?.longitude ?: 126.9780
+
                     if (accounts.currentUser != null) {
                         saveButton?.isEnabled = false
-                        capsuleStore.create(title.text.toString().trim(), place.text.toString().trim(),
-                            content.text.toString().trim(), opensAt.timeInMillis, selectedFriendIds.toList())
+                        capsuleStore.create(title.text.toString().trim(),
+                            place.text.toString().trim(),
+                            content.text.toString().trim(),
+                            opensAt.timeInMillis,
+                            selectedFriendIds.toList(),
+                            lat, lng)
                             .addOnCompleteListener { task ->
                                 if (isFinishing || isDestroyed || screen != "compose") return@addOnCompleteListener
                         if (task.isSuccessful) capsuleList() else {
@@ -502,9 +761,19 @@ class MainActivity : AppCompatActivity() {
                             }
                     } else {
                         val items = capsules()
-                        items.put(JSONObject().put("title", title.text.toString().trim())
-                            .put("place", place.text.toString().trim()).put("content", content.text.toString().trim())
-                            .put("opensAt", opensAt.timeInMillis))
+                        val lat = currentLocation?.latitude ?: 37.5665
+                        val lng = currentLocation?.longitude ?: 126.9780
+
+                        val newCapsule = JSONObject().apply {
+                            put("title", title.text.toString().trim())
+                            put("place", place.text.toString().trim())
+                            put("content", content.text.toString().trim())
+                            put("opensAt", opensAt.timeInMillis)
+                            put("lat", lat)
+                            put("lng", lng)
+                        }
+                        items.put(newCapsule)
+
                         prefs.edit().putString("capsules", items.toString()).apply()
                         capsuleList()
                     }

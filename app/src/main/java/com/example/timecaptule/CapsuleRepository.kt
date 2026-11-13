@@ -18,7 +18,9 @@ data class SharedCapsule(
     val place: String,
     val content: String,
     val opensAtMillis: Long,
-    val sharedWith: List<String>
+    val sharedWith: List<String>,
+    val lat: Double,
+    val lng: Double
 )
 
 /** Firestore-backed capsules. Shared reads are limited to owner-added friends and unlocked capsules. */
@@ -31,7 +33,10 @@ class CapsuleRepository {
         place: String,
         content: String,
         opensAtMillis: Long,
-        sharedWith: List<String>
+        sharedWith: List<String>,
+        lat: Double,
+        lng: Double
+
     ): Task<Void> {
         val user = auth.currentUser ?: return Tasks.forException(IllegalStateException("로그인이 필요해요."))
         if (sharedWith.distinct().size > 8) return Tasks.forException(IllegalArgumentException("캡슐 하나는 최대 8명과 공유할 수 있어요."))
@@ -44,6 +49,8 @@ class CapsuleRepository {
             "content" to content,
             "opensAt" to Timestamp(Date(opensAtMillis)),
             "sharedWith" to sharedWith.distinct(),
+            "lat" to lat,
+            "lng" to lng,
             "createdAt" to FieldValue.serverTimestamp()
         )
         val batch = db.batch().set(capsuleRef, data)
@@ -97,7 +104,9 @@ class CapsuleRepository {
             place = getString("place") ?: "",
             content = getString("content") ?: "",
             opensAtMillis = opensAt.toDate().time,
-            sharedWith = get("sharedWith") as? List<String> ?: emptyList()
+            sharedWith = get("sharedWith") as? List<String> ?: emptyList(),
+            lat = getDouble("lat") ?: 37.5,
+            lng = getDouble("lng") ?: 126.9
         )
     }
 }
