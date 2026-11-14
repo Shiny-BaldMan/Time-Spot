@@ -45,6 +45,16 @@ service cloud.firestore {
         allow delete: if ownsProfile(uid)
           || (signedIn() && resource.data.ownerUid == request.auth.uid);
       }
+
+      match /friendSettings/{friendUid} {
+        allow get, list: if ownsProfile(uid);
+        allow create, update: if ownsProfile(uid)
+          && friendUid != uid
+          && request.resource.data.keys().hasOnly(['favorite', 'updatedAt'])
+          && request.resource.data.favorite is bool
+          && request.resource.data.updatedAt == request.time;
+        allow delete: if ownsProfile(uid);
+      }
     }
 
     // Exact nickname lookup only. Clients cannot list or change lookup entries.

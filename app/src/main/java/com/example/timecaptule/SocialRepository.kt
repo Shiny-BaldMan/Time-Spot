@@ -8,7 +8,7 @@ import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Source
 import java.util.Locale
 
-data class Friend(val uid: String, val nickname: String)
+data class Friend(val uid: String, val nickname: String, val favorite: Boolean = false)
 data class FriendRequest(
     val id: String,
     val fromUid: String,
@@ -105,21 +105,46 @@ class SocialRepository {
         val uid = currentPid() ?: return Tasks.forException(IllegalStateException("로그인이 필요해요."))
         val asA = db.collection("friendships").whereEqualTo("uidA", uid).get(Source.SERVER)
         val asB = db.collection("friendships").whereEqualTo("uidB", uid).get(Source.SERVER)
-        return Tasks.whenAll(asA, asB).continueWith { task ->
-            if (!task.isSuccessful) throw task.exception ?: IllegalStateException("친구 목록을 불러오지 못했어요.")
-            (asA.result.documents.mapNotNull { document ->
+        return Tasks.whenAll(asA, asB).continueWithTask { task ->
+            if (!task.isSuccessful) {
+                return@continueWithTask Tasks.forException(task.exception ?: IllegalStateException("친구 목록을 불러오지 못했어요."))
+            }
+            val favorites = db.collection("users").document(uid).collection("friendSettings").get(Source.SERVER)
+            favorites.continueWith { favoriteTask ->
+                // Keep the list available while updated Firestore rules are being deployed.
+                val favoriteUids = if (favoriteTask.isSuccessful) {
+                    favoriteTask.result.documents
+                        .filter { it.getBoolean("favorite") == true }
+                        .map { it.id }
+                } else emptyList()
+                (asA.result.documents.mapNotNull { document ->
                 val friendUid = document.getString("uidB") ?: return@mapNotNull null
-                Friend(friendUid, document.getString("nicknameB") ?: return@mapNotNull null)
+                Friend(friendUid, document.getString("nicknameB") ?: return@mapNotNull null, friendUid in favoriteUids)
             } + asB.result.documents.mapNotNull { document ->
                 val friendUid = document.getString("uidA") ?: return@mapNotNull null
-                Friend(friendUid, document.getString("nicknameA") ?: return@mapNotNull null)
-            }).distinctBy { it.uid }.sortedBy { it.nickname.lowercase(Locale.ROOT) }
+                Friend(friendUid, document.getString("nicknameA") ?: return@mapNotNull null, friendUid in favoriteUids)
+            }).distinctBy { it.uid }
+                .sortedWith(compareByDescending<Friend> { it.favorite }.thenBy { it.nickname.lowercase(Locale.ROOT) })
+            }
+        }
+    }
+
+    fun setFavorite(friendUid: String, favorite: Boolean): Task<Void> {
+        val uid = currentPid() ?: return Tasks.forException(IllegalStateException("로그인이 필요해요."))
+        val setting = db.collection("users").document(uid).collection("friendSettings").document(friendUid)
+        return if (favorite) {
+            setting.set(mapOf("favorite" to true, "updatedAt" to FieldValue.serverTimestamp()))
+        } else {
+            setting.delete()
         }
     }
 
     fun removeFriend(friendUid: String): Task<Void> {
         val uid = currentPid() ?: return Tasks.forException(IllegalStateException("로그인이 필요해요."))
-        return db.collection("friendships").document(pairId(uid, friendUid)).delete()
+        val batch = db.batch()
+        batch.delete(db.collection("friendships").document(pairId(uid, friendUid)))
+        batch.delete(db.collection("users").document(uid).collection("friendSettings").document(friendUid))
+        return batch.commit()
     }
 
     private fun com.google.firebase.firestore.DocumentSnapshot.toFriendRequest(): FriendRequest? {

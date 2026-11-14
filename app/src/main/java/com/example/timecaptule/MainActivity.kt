@@ -16,6 +16,8 @@ import android.os.Looper
 import android.graphics.Color
 import android.view.View
 import android.view.Gravity
+import android.view.ViewGroup
+import android.graphics.drawable.GradientDrawable
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.content.res.ColorStateList
@@ -699,37 +701,143 @@ class MainActivity : AppCompatActivity() {
         selectedFriendIds.clear()
         var friendsReady = accounts.currentUser == null
         var saveButton: Button? = null
+        var friendSelectButton: Button? = null
+        var availableFriends = emptyList<Friend>()
         if (accounts.currentUser == null) {
             label("공개 범위: 나만 보기 (체험 캡슐은 이 기기에 저장됩니다.)")
         } else {
-            label("공유할 친구를 선택하세요. 선택하지 않으면 나만 볼 수 있어요.")
             val friendsStatus = label("친구 목록을 불러오는 중…")
             social.listFriends().addOnCompleteListener { task ->
                 if (isFinishing || isDestroyed || screen != "compose") return@addOnCompleteListener
                 friendsStatus.visibility = View.GONE
                 if (task.isSuccessful) {
-                    if (task.result.isEmpty()) label("친구 · 계정에서 닉네임으로 친구 요청을 보낼 수 있어요.")
-                    task.result.forEach { friend ->
-                        CheckBox(this).apply {
-                            text = "${friend.nickname}"
-                            setOnCheckedChangeListener { _, checked ->
-                                if (checked && selectedFriendIds.size >= 8) {
-                                    isChecked = false
-                                    Toast.makeText(this@MainActivity, "캡슐 하나는 최대 8명과 공유할 수 있어요.", Toast.LENGTH_SHORT).show()
-                                } else if (checked) selectedFriendIds.add(friend.uid) else selectedFriendIds.remove(friend.uid)
-                            }
-                            body.addView(this)
-                        }
-                    }
+                    availableFriends = task.result
+                    if (availableFriends.isEmpty()) label("친구 · 계정에서 닉네임으로 친구 요청을 보낼 수 있어요.")
                     friendsReady = true
                     saveButton?.isEnabled = true
+                    friendSelectButton?.isEnabled = true
                 } else {
                     label(accounts.errorMessage(task.exception))
                     friendsReady = true
                     saveButton?.isEnabled = true
+                    friendSelectButton?.isEnabled = false
                 }
             }
+            friendSelectButton = button("친구 선택") {
+                if (!friendsReady) {
+                    Toast.makeText(this, "친구 목록을 불러오는 중이에요.", Toast.LENGTH_SHORT).show()
+                    return@button
+                }
+                if (availableFriends.isEmpty()) {
+                    AlertDialog.Builder(this)
+                        .setTitle("공유할 친구가 없어요")
+                        .setMessage("친구 탭에서 친구를 추가하면 캡슐을 함께 공유할 수 있어요.")
+                        .setPositiveButton("확인", null)
+                        .show()
+                    return@button
+                }
+                val draftSelection = selectedFriendIds.toMutableSet()
+                val names = availableFriends.map { it.nickname }.toTypedArray()
+                val checked = availableFriends.map { it.uid in draftSelection }.toBooleanArray()
+                AlertDialog.Builder(this)
+                    .setTitle("공유할 친구 선택 (최대 8명)")
+                    .setMultiChoiceItems(names, checked) { dialog, index, isChecked ->
+                        val friendUid = availableFriends[index].uid
+                        if (isChecked && draftSelection.size >= 8) {
+                            (dialog as? AlertDialog)?.listView?.setItemChecked(index, false)
+                            Toast.makeText(this, "캡슐 하나는 최대 8명과 공유할 수 있어요.", Toast.LENGTH_SHORT).show()
+                        } else if (isChecked) draftSelection.add(friendUid) else draftSelection.remove(friendUid)
+                    }
+                    .setNegativeButton("취소", null)
+                    .setPositiveButton("확인") { _, _ ->
+                        selectedFriendIds.clear()
+                        selectedFriendIds.addAll(draftSelection)
+                        friendSelectButton?.text = if (selectedFriendIds.isEmpty()) "친구 선택" else "친구 선택 (${selectedFriendIds.size}명)"
+                    }
+                    .show()
+            }.apply { isEnabled = false }
         }
+        fun storeCapsule(lat: Double, lng: Double) {
+            val titleValue = title.text.toString().trim()
+            val placeValue = place.text.toString().trim()
+            val contentValue = content.text.toString().trim()
+            if (accounts.currentUser != null) {
+                saveButton?.isEnabled = false
+                capsuleStore.create(
+                    titleValue,
+                    placeValue,
+                    contentValue,
+                    opensAt.timeInMillis,
+                    selectedFriendIds.toList(),
+                    lat,
+                    lng
+                ).addOnCompleteListener { task ->
+                    if (isFinishing || isDestroyed || screen != "compose") return@addOnCompleteListener
+                    if (task.isSuccessful) capsuleList() else {
+                        saveButton?.isEnabled = true
+                        Toast.makeText(this, accounts.errorMessage(task.exception), Toast.LENGTH_LONG).show()
+                    }
+                }
+            } else {
+                val items = capsules()
+                val newCapsule = JSONObject().apply {
+                    put("title", titleValue)
+                    put("place", placeValue)
+                    put("content", contentValue)
+                    put("opensAt", opensAt.timeInMillis)
+                    put("lat", lat)
+                    put("lng", lng)
+                }
+                items.put(newCapsule)
+                prefs.edit().putString("capsules", items.toString()).apply()
+                capsuleList()
+            }
+        }
+
+        fun showLocationPreview(lat: Double, lng: Double) {
+            val mapPreview = WebView(this).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                setBackgroundColor(Color.WHITE)
+                loadDataWithBaseURL("https://localhost", """
+                    <!doctype html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0">
+                    <style>html,body,#map{height:100%;margin:0;padding:0}</style>
+                    <script>
+                    function initMap(){
+                      const point={lat:$lat,lng:$lng};
+                      const map=new google.maps.Map(document.getElementById('map'),{center:point,zoom:16,disableDefaultUI:true,zoomControl:true});
+                      new google.maps.Marker({position:point,map:map,title:'캡슐을 묻을 위치'});
+                    }
+                    </script><script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyC3a4FBTAdKaR9BMSVUd-UmpFBcNrrdUWg&callback=initMap"></script>
+                    </head><body><div id="map"></div></body></html>
+                """.trimIndent(), "text/html", "UTF-8", null)
+            }
+            val locationDialog = AlertDialog.Builder(this)
+                .setTitle("캡슐 위치 확인")
+                .setMessage("지도에 표시된 핀이 캡슐을 묻을 위치인지 확인해 주세요.")
+                .setView(mapPreview)
+                .setNegativeButton("취소", null)
+                .setPositiveButton("위치 확인", null)
+                .create()
+            locationDialog.setOnShowListener {
+                locationDialog.window?.setLayout(-1, dp(560))
+                locationDialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                    locationDialog.dismiss()
+                    AlertDialog.Builder(this)
+                        .setTitle("캡슐을 저장할까요?")
+                        .setMessage("한번 묻은 캡슐은 열람 전까지 수정하거나 삭제할 수 없습니다.")
+                        .setNegativeButton("돌아가기", null)
+                        .setPositiveButton("확인") { _, _ -> storeCapsule(lat, lng) }
+                        .show()
+                }
+            }
+            locationDialog.setOnDismissListener {
+                mapPreview.stopLoading()
+                mapPreview.destroy()
+            }
+            locationDialog.show()
+        }
+
         saveButton = button("캡슐 저장") {
             if (!friendsReady) {
                 Toast.makeText(this, "친구 목록을 불러오는 중이에요.", Toast.LENGTH_SHORT).show()
@@ -741,42 +849,12 @@ class MainActivity : AppCompatActivity() {
                 content.text.isBlank() -> content.error = "내용을 입력해 주세요."
                 opensAt.timeInMillis <= System.currentTimeMillis() -> Toast.makeText(this, "미래 시간을 선택해 주세요.", Toast.LENGTH_SHORT).show()
                 else -> {
-                    val lat = currentLocation?.latitude ?: 37.5665
-                    val lng = currentLocation?.longitude ?: 126.9780
-
-                    if (accounts.currentUser != null) {
-                        saveButton?.isEnabled = false
-                        capsuleStore.create(title.text.toString().trim(),
-                            place.text.toString().trim(),
-                            content.text.toString().trim(),
-                            opensAt.timeInMillis,
-                            selectedFriendIds.toList(),
-                            lat, lng)
-                            .addOnCompleteListener { task ->
-                                if (isFinishing || isDestroyed || screen != "compose") return@addOnCompleteListener
-                        if (task.isSuccessful) capsuleList() else {
-                                    saveButton?.isEnabled = true
-                                    Toast.makeText(this, accounts.errorMessage(task.exception), Toast.LENGTH_LONG).show()
-                                }
-                            }
-                    } else {
-                        val items = capsules()
-                        val lat = currentLocation?.latitude ?: 37.5665
-                        val lng = currentLocation?.longitude ?: 126.9780
-
-                        val newCapsule = JSONObject().apply {
-                            put("title", title.text.toString().trim())
-                            put("place", place.text.toString().trim())
-                            put("content", content.text.toString().trim())
-                            put("opensAt", opensAt.timeInMillis)
-                            put("lat", lat)
-                            put("lng", lng)
-                        }
-                        items.put(newCapsule)
-
-                        prefs.edit().putString("capsules", items.toString()).apply()
-                        capsuleList()
+                    val location = currentLocation
+                    if (location == null) {
+                        Toast.makeText(this, "현재 위치를 확인할 수 없어요. 지도에서 위치를 확인한 뒤 다시 시도해 주세요.", Toast.LENGTH_LONG).show()
+                        return@button
                     }
+                    showLocationPreview(location.latitude, location.longitude)
                 }
             }
         }
@@ -813,52 +891,167 @@ class MainActivity : AppCompatActivity() {
             button("로그인 · 회원가입") { auth() }
             return
         }
-        button("닉네임으로 친구 요청") { promptFriendRequest() }
-        label("받은 요청", 21)
-        val requestStatus = label("요청을 불러오는 중…")
-        social.incomingRequests().addOnCompleteListener { task ->
+        button("친구 요청") { promptFriendRequest() }
+        button("받은 요청") { showIncomingRequests() }
+        label("친구 목록", 21)
+
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = GradientDrawable().apply {
+                setColor(getColor(R.color.spot_surface))
+                setStroke(dp(1), getColor(R.color.spot_border))
+                cornerRadius = dp(14).toFloat()
+            }
+            clipToOutline = true
+        }
+        val list = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+        }
+        val scroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(list, ViewGroup.LayoutParams(-1, -2))
+        }
+        panel.addView(scroll, LinearLayout.LayoutParams(-1, -1))
+        body.addView(panel, LinearLayout.LayoutParams(-1, dp(350)))
+
+        fun listMessage(message: String) {
+            list.removeAllViews()
+            list.addView(TextView(this).apply {
+                text = message
+                textSize = 15f
+                setTextColor(getColor(R.color.spot_muted))
+                gravity = Gravity.CENTER
+                setPadding(dp(12), dp(20), dp(12), dp(20))
+            }, LinearLayout.LayoutParams(-1, -1))
+        }
+        listMessage("친구 목록을 불러오는 중…")
+        social.listFriends().addOnCompleteListener { task ->
             if (isFinishing || isDestroyed || screen != "friends") return@addOnCompleteListener
-            requestStatus.visibility = View.GONE
             if (!task.isSuccessful) {
-                label(accounts.errorMessage(task.exception))
-            } else if (task.result.isEmpty()) {
-                label("받은 요청이 없어요.")
-            } else {
-                task.result.forEach { request ->
-                    label("${request.fromNickname}님의 친구 요청")
-                    button("수락") {
-                        social.acceptRequest(request).addOnCompleteListener { accepted ->
-                            if (accepted.isSuccessful) friends()
-                            else Toast.makeText(this, accounts.errorMessage(accepted.exception), Toast.LENGTH_LONG).show()
-                        }
+                listMessage(accounts.errorMessage(task.exception))
+                return@addOnCompleteListener
+            }
+            val friendItems = task.result
+            if (friendItems.isEmpty()) {
+                listMessage("수락한 친구가 여기에 표시됩니다.")
+                return@addOnCompleteListener
+            }
+            list.removeAllViews()
+            friendItems.forEachIndexed { index, friend ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(4), dp(3), dp(2), dp(3))
+                }
+                row.addView(TextView(this).apply {
+                    text = friend.nickname
+                    textSize = 17f
+                    setTextColor(getColor(R.color.spot_ink))
+                    gravity = Gravity.CENTER_VERTICAL
+                }, LinearLayout.LayoutParams(0, dp(54), 1f))
+                fun iconButton(icon: Int, description: String, action: () -> Unit) = ImageButton(this).apply {
+                    setImageResource(icon)
+                    imageTintList = ColorStateList.valueOf(getColor(R.color.spot_accent))
+                    contentDescription = description
+                    background = null
+                    scaleType = ImageView.ScaleType.CENTER
+                    setPadding(dp(10), dp(10), dp(10), dp(10))
+                    setOnClickListener { action() }
+                }
+                row.addView(iconButton(
+                    if (friend.favorite) R.drawable.ic_friend_star else R.drawable.ic_friend_star_outline,
+                    if (friend.favorite) "즐겨찾기 해제" else "즐겨찾기 추가"
+                ) {
+                    social.setFavorite(friend.uid, !friend.favorite).addOnCompleteListener { update ->
+                        if (update.isSuccessful) friends()
+                        else Toast.makeText(this, accounts.errorMessage(update.exception), Toast.LENGTH_LONG).show()
                     }
-                    button("거절") {
-                        social.rejectRequest(request).addOnCompleteListener { rejected ->
-                            if (rejected.isSuccessful) friends()
-                            else Toast.makeText(this, accounts.errorMessage(rejected.exception), Toast.LENGTH_LONG).show()
-                        }
-                    }
+                }, LinearLayout.LayoutParams(dp(46), dp(46)))
+                row.addView(iconButton(R.drawable.ic_friend_delete, "친구 삭제") {
+                    AlertDialog.Builder(this)
+                        .setTitle("친구 삭제")
+                        .setMessage(friend.nickname + "님을 친구 목록에서 삭제할까요?")
+                        .setNegativeButton("취소", null)
+                        .setPositiveButton("삭제") { _, _ ->
+                            social.removeFriend(friend.uid).addOnCompleteListener { removal ->
+                                if (removal.isSuccessful) friends()
+                                else Toast.makeText(this, accounts.errorMessage(removal.exception), Toast.LENGTH_LONG).show()
+                            }
+                        }.show()
+                }, LinearLayout.LayoutParams(dp(46), dp(46)))
+                list.addView(row, LinearLayout.LayoutParams(-1, dp(56)))
+                if (index < friendItems.lastIndex) {
+                    list.addView(View(this).apply { setBackgroundColor(getColor(R.color.spot_border)) },
+                        LinearLayout.LayoutParams(-1, dp(1)))
                 }
             }
         }
-        label("내 친구", 21)
-        val friendListStatus = label("친구 목록을 불러오는 중…")
-        social.listFriends().addOnCompleteListener { task ->
-            if (isFinishing || isDestroyed || screen != "friends") return@addOnCompleteListener
-            friendListStatus.visibility = View.GONE
+    }
+
+    private fun showIncomingRequests() {
+        val rows = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(4), dp(4), dp(4))
+        }
+        val scroll = ScrollView(this).apply { addView(rows, ViewGroup.LayoutParams(-1, -2)) }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("받은 친구 요청")
+            .setView(scroll)
+            .setNegativeButton("닫기", null)
+            .create()
+        fun message(text: String) {
+            rows.removeAllViews()
+            rows.addView(TextView(this).apply {
+                this.text = text
+                textSize = 15f
+                setTextColor(getColor(R.color.spot_muted))
+                gravity = Gravity.CENTER
+                setPadding(dp(12), dp(28), dp(12), dp(28))
+            }, LinearLayout.LayoutParams(-1, -2))
+        }
+        message("요청 목록을 불러오는 중…")
+        dialog.show()
+        social.incomingRequests().addOnCompleteListener { task ->
+            if (isFinishing || isDestroyed || !dialog.isShowing) return@addOnCompleteListener
+            rows.removeAllViews()
             if (!task.isSuccessful) {
-                label(accounts.errorMessage(task.exception))
+                message(accounts.errorMessage(task.exception))
             } else if (task.result.isEmpty()) {
-                label("수락한 친구가 여기에 표시됩니다.")
+                message("새 친구 요청이 없어요.")
             } else {
-                task.result.forEach { friend ->
-                    label(friend.nickname, 18)
-                    button("${friend.nickname} 친구 해제") {
-                        social.removeFriend(friend.uid).addOnCompleteListener { removal ->
-                            if (removal.isSuccessful) friends()
-                            else Toast.makeText(this, accounts.errorMessage(removal.exception), Toast.LENGTH_LONG).show()
-                        }
+                task.result.forEach { request ->
+                    val row = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        setPadding(dp(4), dp(8), dp(4), dp(8))
                     }
+                    row.addView(TextView(this).apply {
+                        text = request.fromNickname
+                        textSize = 16f
+                        setTextColor(getColor(R.color.spot_ink))
+                        gravity = Gravity.CENTER_VERTICAL
+                    }, LinearLayout.LayoutParams(0, dp(48), 1f))
+                    fun actionButton(title: String, action: () -> Unit) = com.google.android.material.button.MaterialButton(this).apply {
+                        text = title
+                        isAllCaps = false
+                        insetTop = 0
+                        insetBottom = 0
+                        setOnClickListener { action() }
+                    }
+                    row.addView(actionButton("수락") {
+                        social.acceptRequest(request).addOnCompleteListener { result ->
+                            if (result.isSuccessful) { dialog.dismiss(); friends() }
+                            else Toast.makeText(this, accounts.errorMessage(result.exception), Toast.LENGTH_LONG).show()
+                        }
+                    }, LinearLayout.LayoutParams(-2, dp(42)))
+                    row.addView(actionButton("거절") {
+                        social.rejectRequest(request).addOnCompleteListener { result ->
+                            if (result.isSuccessful) { dialog.dismiss(); friends() }
+                            else Toast.makeText(this, accounts.errorMessage(result.exception), Toast.LENGTH_LONG).show()
+                        }
+                    }, LinearLayout.LayoutParams(-2, dp(42)))
+                    rows.addView(row, LinearLayout.LayoutParams(-1, -2))
                 }
             }
         }
