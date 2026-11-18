@@ -592,9 +592,10 @@ class MainActivity : AppCompatActivity() {
         if (accounts.currentUser == null) {
             renderLocalCapsules()
         } else {
-            label("캡슐을 불러오는 중…")
+            val statusLabel = label("캡슐을 불러오는 중…")
             capsuleStore.listVisible().addOnCompleteListener { task ->
                 if (isFinishing || isDestroyed || screen != "capsules") return@addOnCompleteListener
+                body.removeView(statusLabel)
                 if (task.isSuccessful) renderCloudCapsules(task.result)
                 else label(accounts.errorMessage(task.exception))
             }
@@ -1133,9 +1134,11 @@ class MainActivity : AppCompatActivity() {
         }
         items.sortedByDescending { it.opensAtMillis }.forEach { item ->
             val own = item.ownerUid == accounts.currentUser?.uid
-            val title = if (own) item.title else "${item.ownerNickname}님의 캡슐 · ${item.title}"
-            button("$title\n${item.place} · ${dates.format(item.opensAtMillis)}") {
-                detail(JSONObject().put("title", title).put("place", item.place)
+            val state = if (System.currentTimeMillis() < item.opensAtMillis) "잠김" else "열람 가능"
+            val rawTitle = if (own) item.title else "${item.ownerNickname}님의 캡슐 · ${item.title}"
+            val displayTitle = "[$state] $rawTitle"
+            button("$displayTitle\n${item.place} · ${dates.format(item.opensAtMillis)}") {
+                detail(JSONObject().put("title", rawTitle).put("place", item.place)
                     .put("content", item.content).put("opensAt", item.opensAtMillis))
             }
         }

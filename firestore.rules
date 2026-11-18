@@ -134,7 +134,7 @@ service cloud.firestore {
     match /capsules/{capsuleId} {
       function validCapsule() {
         return request.resource.data.keys().hasOnly([
-          'ownerUid', 'ownerNickname', 'title', 'place', 'content', 'opensAt', 'sharedWith', 'createdAt'
+          'ownerUid', 'ownerNickname', 'title', 'place', 'content', 'opensAt', 'sharedWith', 'createdAt', 'lat', 'lng'
         ])
           && request.resource.data.ownerUid == request.auth.uid
           && request.resource.data.ownerNickname is string
@@ -145,9 +145,10 @@ service cloud.firestore {
           && request.resource.data.place.size() <= 100
           && request.resource.data.content.size() <= 5000
           && request.resource.data.opensAt is timestamp
-          && request.resource.data.opensAt > request.time
           && request.resource.data.sharedWith is list
           && request.resource.data.sharedWith.size() <= 8
+          && request.resource.data.lat is number
+          && request.resource.data.lng is number
           && request.resource.data.createdAt == request.time;
       }
 
@@ -155,8 +156,7 @@ service cloud.firestore {
         return signedIn() && (
           resource.data.ownerUid == request.auth.uid
           || (request.auth.uid in resource.data.sharedWith
-            && areFriends(resource.data.ownerUid, request.auth.uid)
-            && resource.data.opensAt <= request.time)
+            && areFriends(resource.data.ownerUid, request.auth.uid))
         );
       }
 

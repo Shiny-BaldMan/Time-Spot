@@ -71,7 +71,6 @@ class CapsuleRepository {
         val uid = auth.currentUser?.uid ?: return Tasks.forException(IllegalStateException("로그인이 필요해요."))
         val mine = db.collection("capsules").whereEqualTo("ownerUid", uid).get(Source.SERVER)
         val sharedRefs = db.collection("users").document(uid).collection("sharedCapsules")
-            .whereLessThanOrEqualTo("opensAt", Timestamp.now())
             .get(Source.SERVER)
 
         return Tasks.whenAll(mine, sharedRefs).continueWithTask { loaded ->
